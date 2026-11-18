@@ -338,7 +338,15 @@ rcmd() {
     if [ "$USE_SSH" = true ]; then
         $SSH_CMD "$@"
     else
-        adb shell "$@"
+        local output rc
+        output=$(adb shell "$*; __opencode_rc=\$?; echo __OPENCODE_RC__\$__opencode_rc") || return $?
+        rc=${output##*__OPENCODE_RC__}
+        rc=$(printf '%s' "$rc" | tr -d '\r\n')
+        case "$rc" in
+            ''|*[!0-9]*) return 1 ;;
+        esac
+        printf '%s\n' "${output%__OPENCODE_RC__*}"
+        return "$rc"
     fi
 }
 
@@ -421,7 +429,11 @@ export ZTE_AGENT_PASSWORD='${SAFE_PASSWORD}'
 export ZTE_OTA_ROOT='$OTA_ROOT'
 export ZTE_OTA_SUPERVISOR='$SUPERVISOR'
 export ZTE_OTA_LEGACY_LINK='$REMOTE_BIN'
-nohup $SUPERVISOR >/tmp/zte-agent.log 2>&1 &
+if command -v setsid >/dev/null 2>&1; then
+    setsid $SUPERVISOR </dev/null >/tmp/zte-agent.log 2>&1 &
+else
+    nohup $SUPERVISOR </dev/null >/tmp/zte-agent.log 2>&1 &
+fi
 BOOT
     rpush /tmp/start_zte_agent.sh "$STARTUP_SCRIPT"
     rm /tmp/start_zte_agent.sh
@@ -471,7 +483,7 @@ fi
 TOKEN=$(curl -sf "$VERIFY_URL" \
     -H 'Content-Type: application/json' \
     -d "{\"password\":\"$AGENT_PASSWORD\"}" \
-    | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["token"])')
+    | python3 -c 'import sys,json; d=json.load(sys.stdin).get("data",{}); print(d.get("token", ""))' 2>/dev/null) || true
 
 if [ "$USE_SSH" != true ]; then
     adb forward --remove tcp:19090 2>/dev/null || true
